@@ -26,14 +26,14 @@
 
 #include <cstdint>
 #include <fstream>
-#include <string>
-
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <sys/stat.h>
 
 #include "code-buffer-vixl.h"
+
 #include "aarch64/decoder-aarch64.h"
 #include "aarch64/disasm-aarch64.h"
 #include "aarch64/instructions-aarch64.h"
@@ -45,10 +45,20 @@ using namespace vixl;
 using namespace vixl::aarch64;
 
 class FindDangerousBranchDisassembler : public Disassembler {
+ public:
   bool dangerous = false;
+
+  void DisassembleBuffer(const Instruction* start,
+                         const Instruction* end,
+                         const ISAMap* map) {
+    Decoder decoder;
+    decoder.AppendVisitor(this);
+    decoder.Decode(start, end, map);
+  }
+
+
   void VisitUnconditionalBranchToRegister(
-    const Instruction* instruction) override {
-    
+      const Instruction* instruction) override {
     switch (instruction->Mask(UnconditionalBranchToRegisterMask)) {
       case BR:
         dangerous = true;
@@ -127,8 +137,9 @@ int main(int argc, char* argv[]) {
     } else if (strcmp(arg, "--c64") == 0) {
       isa = ISA::C64;
     } else {
-      // Get a file by doing a 
-      // ` ~/cheri/output/morello-sdk/bin/llvm-objcopy -O binary --only-section=.text`
+      // Get a file by doing a
+      // ` ~/cheri/output/morello-sdk/bin/llvm-objcopy -O binary
+      // --only-section=.text`
       fileName = std::string(arg);
     }
   }
@@ -145,7 +156,7 @@ int main(int argc, char* argv[]) {
   do {
     fileStream.read((char*)&instruction, sizeof(uint32_t));
     buffer.Emit((Instr)instruction);
-  } while(fileStream.tellg() != st.st_size);
+  } while (fileStream.tellg() != st.st_size);
 
   buffer.SetClean();
 
@@ -163,11 +174,14 @@ int main(int argc, char* argv[]) {
   const Instruction* start = buffer.GetStartAddress<Instruction*>();
   const Instruction* end = buffer.GetEndAddress<Instruction*>();
   vixl::aarch64::PrintDisassembler disasm(stdout);
-  FindDangerousBranchDisassembler dangerousBranch();
+  FindDangerousBranchDisassembler dangerousBranch;
+
   disasm.PrintSignedAddresses(true);
   disasm.MapCodeAddress(start_address, start);
   ISAMap map(isa);
   disasm.DisassembleBuffer(start, end, &map);
+  dangerousBranch.DisassembleBuffer(start, end, &map);
+  std::cout << "Dangerous found:" << dangerousBranch.dangerous << std::endl;
 
   return 0;
 }
