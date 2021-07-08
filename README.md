@@ -36,6 +36,10 @@ Licence
 This software is covered by the licence described in the [LICENCE](LICENCE)
 file.
 
+How to build the Check Dynamic Branch example.
+`git submodule init`
+`git submodule update`
+`scons aarch64_examples -j15 mode=debug`
 
 Requirements
 ============
