@@ -77,7 +77,7 @@ top_level_targets = VIXLTargets()
 options = {
     'all' : { # Unconditionally processed.
       'CCFLAGS' : ['-Wall',
-                   '-Werror',
+                  #  '-Werror',
                    '-fdiagnostics-show-option',
                    '-Wextra',
                    '-Wredundant-decls',
@@ -458,6 +458,7 @@ def VIXLLibraryTarget(env):
 
 # The VIXL library, built by default.
 env = Environment(variables = vars,
+                  CPPPATH = ['ELFIO'],
                   BUILDERS = {
                       'Markdown': Builder(action = 'markdown $SOURCE > $TARGET',
                                           suffix = '.html')

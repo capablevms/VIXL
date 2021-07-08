@@ -33,6 +33,8 @@
 #include <sys/stat.h>
 
 #include "code-buffer-vixl.h"
+#include "elfio/elf_types.hpp"
+#include "elfio/elfio.hpp"
 
 #include "aarch64/decoder-aarch64.h"
 #include "aarch64/disasm-aarch64.h"
@@ -44,9 +46,10 @@
 using namespace vixl;
 using namespace vixl::aarch64;
 
+// This actually doesn't work.
 class FindDangerousBranchDisassembler : public Disassembler {
  public:
-  bool dangerous = false;
+  uint64_t dangerous = 0;
 
   void DisassembleBuffer(const Instruction* start,
                          const Instruction* end,
@@ -61,26 +64,26 @@ class FindDangerousBranchDisassembler : public Disassembler {
       const Instruction* instruction) override {
     switch (instruction->Mask(UnconditionalBranchToRegisterMask)) {
       case BR:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BLR:
-        dangerous = true;
+        dangerous += 1;
         break;
       case RET: {
         // ignore returns for now.
         break;
       }
       case BRAAZ:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BRABZ:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BLRAAZ:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BLRABZ:
-        dangerous = true;
+        dangerous += 1;
         break;
       case RETAA:
         // ignore return for now
@@ -89,16 +92,16 @@ class FindDangerousBranchDisassembler : public Disassembler {
         // ignore return for now
         break;
       case BRAA:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BRAB:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BLRAA:
-        dangerous = true;
+        dangerous += 1;
         break;
       case BLRAB:
-        dangerous = true;
+        dangerous += 1;
         break;
     }
   }
@@ -114,65 +117,9 @@ int64_t ParseInt64(char const* arg) {
   return (int64_t)strtoll(arg, NULL, 0);
 }
 
-int main(int argc, char* argv[]) {
-  for (int i = 1; i < argc; i++) {
-    char const* arg = argv[i];
-    if ((strcmp(arg, "--help") == 0) || (strcmp(arg, "-h") == 0)) {
-      return 0;
-    }
-  }
-
-  int64_t start_address = 0;
-  ISA isa = ISA::A64;
-  std::string fileName;
-
-  bool expect_start_at = false;
-  for (int i = 1; i < argc; i++) {
-    char* arg = argv[i];
-    if (strcmp(arg, "--start-at") == 0) {
-      char* arg = argv[++i];
-      start_address = ParseInt64(arg);
-    } else if (strcmp(arg, "--a64") == 0) {
-      isa = ISA::A64;
-    } else if (strcmp(arg, "--c64") == 0) {
-      isa = ISA::C64;
-    } else {
-      // Get a file by doing a
-      // ` ~/cheri/output/morello-sdk/bin/llvm-objcopy -O binary
-      // --only-section=.text`
-      fileName = std::string(arg);
-    }
-  }
-
-  std::ifstream fileStream;
-  struct stat st;
-
-  stat(fileName.c_str(), &st);
-  CodeBuffer buffer(st.st_size + 4);
-
-  fileStream.open(fileName, std::ifstream::in | std::ifstream::binary);
-
-  uint32_t instruction;
-  do {
-    fileStream.read((char*)&instruction, sizeof(uint32_t));
-    buffer.Emit((Instr)instruction);
-  } while (fileStream.tellg() != st.st_size);
-
-  buffer.SetClean();
-
-  if (expect_start_at) {
-    printf("No address given. Use: --start-at <address>\n");
-    return 1;
-  }
-
-  if (buffer.GetSizeInBytes() == 0) {
-    printf("Nothing to disassemble.\n");
-    return 0;
-  }
-
-  // Disassemble the buffer.
-  const Instruction* start = buffer.GetStartAddress<Instruction*>();
-  const Instruction* end = buffer.GetEndAddress<Instruction*>();
+void printFunction(ISA isa, int64_t start_address, Instruction* instructions, uint64_t size) {
+  const Instruction* start = instructions;
+  const Instruction* end = instructions + size;
   vixl::aarch64::PrintDisassembler disasm(stdout);
   FindDangerousBranchDisassembler dangerousBranch;
 
@@ -181,8 +128,72 @@ int main(int argc, char* argv[]) {
   ISAMap map(isa);
   disasm.DisassembleBuffer(start, end, &map);
   dangerousBranch.DisassembleBuffer(start, end, &map);
-  std::cout << "Dangerous found:" << dangerousBranch.dangerous << std::endl;
+  std::cout << "Dangerous found: " << dangerousBranch.dangerous << std::endl;
+}
 
+int main(int argc, char* argv[]) {
+  for (int i = 1; i < argc; i++) {
+    char const* arg = argv[i];
+    if ((strcmp(arg, "--help") == 0) || (strcmp(arg, "-h") == 0)) {
+      return 0;
+    }
+  }
+
+
+  ISA isa = ISA::A64;
+  std::string fileName;
+  for (int i = 1; i < argc; i++) {
+    char* arg = argv[i];
+    if (strcmp(arg, "--a64") == 0) {
+      isa = ISA::A64;
+    } else if (strcmp(arg, "--c64") == 0) {
+      isa = ISA::C64;
+    } else {
+      fileName = std::string(arg);
+    }
+  }
+
+  ELFIO::elfio reader;
+  if (!reader.load(fileName)) {
+    std::cout << "Invalid elf file: " << fileName << "\n";
+    return -1;
+  } else {
+    ELFIO::Elf_Half sec_num = reader.sections.size();
+    for (int i = 0; i < sec_num; ++i) {
+      ELFIO::section* psec = reader.sections[i];
+      // std::cout << "  [" << i << "] " << psec->get_name() << "\t"
+                // << psec->get_size() << " 0x" << std::hex << psec->get_address() << std::endl;
+  
+      
+      if (psec->get_type() != SHT_SYMTAB) {
+        continue;
+      }
+      
+
+      const ELFIO::symbol_section_accessor symbols(reader, psec);
+      for (unsigned int j = 0; j < symbols.get_symbols_num(); ++j) {
+        std::string name;
+        ELFIO::Elf64_Addr value;
+        ELFIO::Elf_Xword size;
+        unsigned char bind;
+        unsigned char type;
+        ELFIO::Elf_Half section_index;
+        unsigned char other;
+
+        // Read symbol properties
+        symbols
+            .get_symbol(j, name, value, size, bind, type, section_index, other);
+        if (type == 2 && size > 0) {
+          ELFIO::section* symbol_section = reader.sections[section_index];
+
+          uint64_t offset = value - symbol_section->get_address();
+          std::cout << j << " " << name << " " << (unsigned int)type << " "
+                    << std::hex << offset << std::dec << std::endl;
+          printFunction(isa, value, (Instruction*)(symbol_section->get_data() + offset - 1), size/4);
+        }
+      }
+    }
+  }
   return 0;
 }
 
